@@ -20,7 +20,7 @@
 5. 填写完成后自动生成新文档并保存
 
 **支持的文档格式：**
-- Word 文档：`.docx`、`.doc`
+- Word 文档：`.docx`
 - Excel 表格：`.xlsx`、`.xls`
 - PDF 文档：`.pdf`
 - 文本文件：`.txt`、`.md`、`.rtf`、`.csv`
@@ -45,9 +45,9 @@
 
 #### 文档处理系统
 
-- **统一文档解析入口**（docParser.ts）：支持 13 种文档格式的文本提取
-- **Word 文档处理器**（docxHandler.ts）：基于 JSZip 直接操作 XML 结构，保留原始格式
-- **Excel 文档处理器**（xlsxHandler.ts）：基于 SheetJS 处理 Excel 文件
+- **统一文档解析入口**（docParser.ts）：支持 14 种文档格式的文本提取
+- **Word 文档处理器**（docxHandler.ts）：基于 PizZip 直接操作 XML 结构，保留原始格式
+- **Excel 文档处理器**（xlsxHandler.ts）：基于 PizZip 直接操作 xlsx 内部 XML 结构
 
 #### 用户体验优化
 
@@ -57,7 +57,6 @@
 
 #### Bug 修复
 
-- 修复 koa-connect 中间件 ctx 泄漏问题
 - 修复 clearAgentMessage 错误定位问题
 - 修复 pdf-parse v2 导入导致的构建失败
 - 修复表单填写会话中组件不消失的问题
@@ -90,6 +89,7 @@
 - **文档摘要**（Amelia）：提取文档核心内容，生成结构化摘要
 - **文件整理**（James）：自动分类、重命名、重组文件夹
 - **跨会话记忆**（Sophie）：记住用户偏好和历史交互，提供个性化服务
+- **多模型支持**：内置 DeepSeek、OpenAI、Anthropic、Google、智谱、通义千问、Moonshot 等 Provider，兼容任意 OpenAI 兼容 API
 
 ## 技术栈
 
@@ -97,7 +97,7 @@
 - **桌面框架**：Neutralinojs
 - **状态管理**：Zustand
 - **构建工具**：Vite 5
-- **文档处理**：JSZip（docx）、SheetJS（xlsx）、pdf-parse（pdf）
+- **文档处理**：PizZip（docx / xlsx）、pdf-parse（pdf）
 
 ## 快速开始
 
@@ -133,12 +133,15 @@ npm run neu:build    # 构建并打包 Neutralinojs 应用
 
 ```
 src/
-  main/              # Neutralinojs 主进程（Native API）
   renderer/          # React 渲染进程
     agents/          # Agent 定义与注册
+    api/             # Neutralinojs Native API 封装
+    codebase/        # 代码库依赖分析
     components/      # UI 组件
+    knowledge/       # 知识库检索
     memory/          # 记忆存储
     stores/          # Zustand 状态管理
+    styles/          # 样式文件
     utils/           # LLM 调用、文档处理、工具函数
 ```
 
