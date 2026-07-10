@@ -75,6 +75,21 @@
     color: rgba(20, 17, 17, 0.7);
   }
 
+  .select-brutal {
+    @apply border-2 border-brutal-black bg-white px-4 py-2 font-bold;
+    box-shadow: 2px 2px 0px #141111;
+    transition: all 0.05s ease-out;
+    outline: none;
+    cursor: pointer;
+  }
+  .select-brutal:focus {
+    box-shadow: 4px 4px 0px #141111;
+    transform: translateY(-1px);
+  }
+  .select-brutal:hover {
+    @apply bg-brutal-cream;
+  }
+
   .msg-agent {
     @apply border-l-4 border-brutal-yellow pl-4 py-2;
   }

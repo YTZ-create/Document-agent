@@ -7,24 +7,26 @@ import { ChatView } from './components/chat/ChatView'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { AgentConversation } from './components/detail/AgentConversation'
 import { useChatStore } from './stores/chatStore'
+import { useFormFillStore } from './stores/formFillStore'
 import { useFolderStore } from './stores/folderStore'
 import { useSettingsStore } from './stores/settingsStore'
 import type { FileEntry } from './api/neutralino'
-import { X, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { X, PanelRightClose, PanelRightOpen, Plus } from 'lucide-react'
 
 const App: React.FC = () => {
   const [showDetail, setShowDetail] = useState(true)
   const [detailFile, setDetailFile] = useState<FileEntry | null>(null)
-  const { messages, restoreMessages } = useChatStore()
-  const { loadAgentModels } = useSettingsStore()
+  const messages = useChatStore((s) => s.messages)
+  const clearChat = useChatStore((s) => s.clearChat)
+  const endSession = useFormFillStore((s) => s.endSession)
+  const loadAgentModels = useSettingsStore((s) => s.loadAgentModels)
   const activeFolderId = useFolderStore((s) => s.activeFolderId)
   const activeFolder = useFolderStore((s) => s.folders.find((f) => f.id === activeFolderId))
 
   const lastAgentMsg = [...messages].reverse().find((m) => m.role === 'agent')
 
-  // 启动时恢复历史消息和 Agent 模型配置
+  // 启动时加载 Agent 模型配置
   useEffect(() => {
-    restoreMessages()
     loadAgentModels()
   }, [])
 
@@ -47,13 +49,25 @@ const App: React.FC = () => {
                 </p>
               )}
             </div>
-            <button
-              onClick={() => setShowDetail(!showDetail)}
-              className="p-1.5 hover:bg-brutal-yellow transition-colors flex-shrink-0 border-2 border-brutal-black"
-              title={showDetail ? '隐藏详情' : '显示详情'}
-            >
-              {showDetail ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  clearChat()
+                  endSession()
+                }}
+                className="p-1.5 hover:bg-brutal-yellow transition-colors flex-shrink-0 border-2 border-brutal-black"
+                title="新建对话"
+              >
+                <Plus size={14} />
+              </button>
+              <button
+                onClick={() => setShowDetail(!showDetail)}
+                className="p-1.5 hover:bg-brutal-yellow transition-colors flex-shrink-0 border-2 border-brutal-black"
+                title={showDetail ? '隐藏详情' : '显示详情'}
+              >
+                {showDetail ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+              </button>
+            </div>
           </div>
 
           <div className="flex-1 min-h-0">

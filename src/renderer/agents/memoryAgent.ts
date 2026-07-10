@@ -3,7 +3,7 @@
  * 支持：记住(storage)、回忆(recall)、遗忘(forget)、查看统计
  */
 
-import { BaseAgent, type AgentConfig } from './base'
+import { BaseAgent, type AgentConfig, type AgentContext } from './base'
 import type { PlatformAPI } from '../api/platformAPI'
 import type { MemoryStore } from '../memory/memoryStore'
 import { callLLM } from '../utils/llm'
@@ -57,7 +57,7 @@ export class MemoryAgent extends BaseAgent {
   }
 
   async execute(
-    ctx: { folder: { path: string }; userMessage: string },
+    ctx: AgentContext,
     onToken?: (token: string) => void
   ): Promise<string> {
     const msg = ctx.userMessage.trim()
@@ -120,7 +120,7 @@ category 选择规则：
         ],
       })
 
-      const jsonMatch = result.match(/\{[\s\S]*?\}/)
+      const jsonMatch = result.match(/\{[\s\S]*\}/)
       if (!jsonMatch) return '抱歉，我没能理解你想记住的内容，请更具体地描述。'
 
       const parsed = JSON.parse(jsonMatch[0])
@@ -139,7 +139,7 @@ category 选择规则：
       const entry = this.memoryStore.upsert({
         category: 'general',
         key: `mem-${Date.now()}`,
-        content: msg.replace(/^(记住|记下|存储)\s*/i, ''),
+        content: msg.replace(/^(记住|记下|存储)\s*(这个|一下|它)?[：:]?\s*/i, ''),
         tags: [],
         projectPath: projectPath || undefined,
       })
@@ -147,6 +147,7 @@ category 选择规则：
       return `✅ 已记住！\n\n**内容**: ${entry.content}`
     }
   }
+
 
   // ========== 回忆 ==========
 
@@ -208,7 +209,11 @@ ${msg}
         if (this.memoryStore.delete(e.id)) deleted++
       }
 
-      await this.memoryStore.flush()
+      try {
+        await this.memoryStore.flush()
+      } catch (err) {
+        console.error('Failed to flush memory store:', err)
+      }
       return `🗑️ 已删除 ${deleted} 条相关记忆。`
     } catch {
       return `📭 请更具体地说明想删除什么记忆，例如："忘了关于 React 技术栈的记忆"。`

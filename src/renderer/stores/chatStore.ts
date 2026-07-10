@@ -5,6 +5,19 @@ import { api } from '../api/neutralino'
 const STORAGE_KEY = 'chat_history'
 const MAX_HISTORY = 50
 
+// 防抖函数：延迟执行存储操作，避免频繁写入
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+const debouncedPersist = (messages: ChatMessage[]) => {
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => {
+    try {
+      api.settings.setData(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_HISTORY)))
+    } catch {
+      // 存储失败，忽略
+    }
+  }, 500) // 500ms 防抖
+}
+
 export interface SearchResult {
   file: FileEntry
   matches: { line: number; content: string }[]
@@ -44,6 +57,7 @@ interface ChatState {
   addAgentConversation: (msg: Omit<AgentConversationMessage, 'id' | 'timestamp'>) => void
   clearAgentConversation: () => void
   clearMessages: () => void
+  clearChat: () => void
   setIsStreaming: (v: boolean) => void
   setActiveAgent: (id: string | null) => void
   setAbortController: (c: AbortController | null) => void
@@ -66,10 +80,10 @@ export const useChatStore = create<ChatState>((set) => ({
     set((s) => {
       const newMessages = [
         ...s.messages,
-        { ...msg, id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, timestamp: Date.now() },
+        { ...msg, id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${Math.random().toString(36).slice(2, 6)}`, timestamp: Date.now() },
       ]
-      // 自动持久化
-      try { api.storage.setData(STORAGE_KEY, JSON.stringify(newMessages.slice(-MAX_HISTORY))) } catch { /* skip */ }
+      // 使用防抖持久化，避免频繁写入
+      debouncedPersist(newMessages)
       return { messages: newMessages }
     }),
 
@@ -80,7 +94,8 @@ export const useChatStore = create<ChatState>((set) => ({
       if (lastIdx >= 0 && messages[lastIdx].role === 'agent') {
         messages[lastIdx] = { ...messages[lastIdx], content }
       }
-      try { api.storage.setData(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_HISTORY))) } catch { /* skip */ }
+      // 使用防抖持久化，避免频繁写入
+      debouncedPersist(messages)
       return { messages }
     }),
 
@@ -88,13 +103,17 @@ export const useChatStore = create<ChatState>((set) => ({
     set((s) => ({
       agentConversation: [
         ...s.agentConversation,
-        { ...msg, id: `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, timestamp: Date.now() },
+        { ...msg, id: `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${Math.random().toString(36).slice(2, 6)}`, timestamp: Date.now() },
       ],
     })),
 
   clearAgentConversation: () => set({ agentConversation: [] }),
 
   clearMessages: () => set({ messages: [] }),
+  clearChat: () => {
+    set({ messages: [], agentConversation: [], activeAgentId: null, isStreaming: false })
+    try { api.settings.setData(STORAGE_KEY, JSON.stringify([])) } catch { /* skip */ }
+  },
   setIsStreaming: (v) => set({ isStreaming: v }),
   setActiveAgent: (id) => set({ activeAgentId: id }),
   setAbortController: (c) => set({ abortController: c }),
@@ -109,7 +128,7 @@ export const useChatStore = create<ChatState>((set) => ({
     const state = useChatStore.getState()
     const recent = state.messages.slice(-MAX_HISTORY)
     try {
-      api.storage.setData(STORAGE_KEY, JSON.stringify(recent))
+      api.settings.setData(STORAGE_KEY, JSON.stringify(recent))
     } catch {
       // 存储失败，忽略
     }
@@ -118,10 +137,16 @@ export const useChatStore = create<ChatState>((set) => ({
   /** 从本地存储恢复消息 */
   restoreMessages: async () => {
     try {
-      const raw = await api.storage.getData(STORAGE_KEY)
+      const raw = await api.settings.getData(STORAGE_KEY)
       if (raw) {
-        const messages = JSON.parse(raw)
-        set({ messages })
+        const parsed = JSON.parse(raw)
+        // 基本类型验证
+        if (Array.isArray(parsed)) {
+          const messages = parsed.filter((m: any) =>
+            m && typeof m === 'object' && typeof m.id === 'string' && typeof m.content === 'string'
+          )
+          set({ messages })
+        }
       }
     } catch {
       // 读取失败，使用空消息

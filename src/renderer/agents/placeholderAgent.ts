@@ -1,4 +1,4 @@
-import { BaseAgent, type AgentConfig } from './base'
+import { BaseAgent, type AgentConfig, type AgentContext } from './base'
 import type { PlatformAPI } from '../api/platformAPI'
 import { FlaskConical } from 'lucide-react'
 
@@ -27,9 +27,16 @@ export class PlaceholderAgent extends BaseAgent {
   }
 
   async execute(
-    ctx: { folder: { path: string }; userMessage: string },
+    ctx: AgentContext,
     onToken?: (token: string) => void
   ): Promise<string> {
-    return '你好！我是 Ethan，目前还在开发中，敬请期待我的新功能！🚀'
+    const reply = '你好！我是 Ethan，目前还在开发中，敬请期待我的新功能！🚀'
+    if (onToken) {
+      for (const char of reply) {
+        onToken(char)
+        await new Promise((r) => setTimeout(r, 10))
+      }
+    }
+    return reply
   }
 }

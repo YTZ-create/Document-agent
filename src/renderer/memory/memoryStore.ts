@@ -123,11 +123,22 @@ export class MemoryStore {
       byCategory[e.category] = (byCategory[e.category] || 0) + 1
     }
 
+    let oldest: number | null = null
+    let newest: number | null = null
+    if (this.entries.length > 0) {
+      oldest = this.entries[0].createdAt
+      newest = this.entries[0].updatedAt
+      for (const e of this.entries) {
+        if (e.createdAt < (oldest ?? Infinity)) oldest = e.createdAt
+        if (e.updatedAt > (newest ?? -Infinity)) newest = e.updatedAt
+      }
+    }
+
     return {
       total: this.entries.length,
       byCategory,
-      oldestEntry: this.entries.length > 0 ? Math.min(...this.entries.map((e) => e.createdAt)) : null,
-      newestEntry: this.entries.length > 0 ? Math.max(...this.entries.map((e) => e.updatedAt)) : null,
+      oldestEntry: oldest,
+      newestEntry: newest,
     }
   }
 
@@ -156,11 +167,13 @@ export class MemoryStore {
   }
 
   private async persist(): Promise<void> {
+    const entriesSnapshot = this.entries
+    this.dirty = false
     try {
-      await this.platform.storage.setData(STORAGE_KEY, JSON.stringify(this.entries))
-      this.dirty = false
+      await this.platform.storage.setData(STORAGE_KEY, JSON.stringify(entriesSnapshot))
     } catch {
-      // 存储失败，保留在内存中
+      // 存储失败，恢复 dirty 标志以便下次重试
+      this.dirty = true
     }
   }
 }

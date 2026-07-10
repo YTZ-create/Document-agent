@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../stores/chatStore'
 import { formatChatTime } from '../../utils/formatters'
-import { Bot, User, Info, Sparkles, FolderSearch, Code2, FileText, FolderCog, Brain, FlaskConical } from 'lucide-react'
+import { Bot, User, Info, Sparkles, FolderSearch, Code2, FileText, FolderCog, Brain, FlaskConical, FileOutput } from 'lucide-react'
 import { agentRegistry } from '../../agents/registry'
 import { AgentCard } from './AgentCard'
 import { cleanHandoffContent } from '../../utils/handoff'
@@ -16,7 +16,7 @@ const AGENT_ICONS: Record<string, React.ComponentType<{ size?: number | string; 
   'doc-summarizer': FileText,
   'file-organizer': FolderCog,
   'memory': Brain,
-  'placeholder': FlaskConical,
+  'form-filler': FileOutput,
 }
 
 export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
@@ -29,7 +29,9 @@ export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) =
 
   const isAgent = message.role === 'agent'
   const agentColor = message.agentColor || '#FFD440'
-  const agentIcon = message.agentName ? AGENT_ICONS[agentRegistry.getAll().find(a => a.name === message.agentName)?.id || ''] || Bot : Bot
+  const agentIcon = message.agentName
+    ? (AGENT_ICONS[agentRegistry.getAll().find(a => a.name === message.agentName)?.id || ''] ?? Bot)
+    : Bot
 
   const handleAvatarClick = () => {
     if (isAgent && message.agentName) {
@@ -61,9 +63,9 @@ export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) =
           </div>
           <div className={isAgent ? 'msg-agent bg-white border-2 border-l-4 border-brutal-black p-3 shadow-brutal-sm' : 'msg-user'}>
             {isAgent ? (
-              <div className="prose prose-sm max-w-none text-sm leading-relaxed"><ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanHandoffContent(message.content)}</ReactMarkdown>{message.content === '' && <span className="inline-block w-2 h-4 bg-brutal-black animate-pulse ml-0.5 align-middle" />}</div>
+              <div className="prose prose-sm max-w-none text-sm leading-relaxed"><ReactMarkdown remarkPlugins={[remarkGfm]}>{typeof message.content === 'string' ? cleanHandoffContent(message.content) : String(message.content || '')}</ReactMarkdown>{message.content === '' && <span className="inline-block w-2 h-4 bg-brutal-black animate-pulse ml-0.5 align-middle" />}</div>
             ) : (
-              <div className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</div>
+              <div className="text-sm leading-relaxed whitespace-pre-wrap">{String(message.content)}</div>
             )}
           </div>
         </div>

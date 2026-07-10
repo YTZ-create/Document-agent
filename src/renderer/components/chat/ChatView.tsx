@@ -1,14 +1,24 @@
 import React, { useRef, useEffect } from 'react'
 import { Bot, Sparkles } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
+import { useFormFillStore } from '../../stores/formFillStore'
 import { agentRegistry } from '../../agents/registry'
 import { MessageBubble } from './MessageBubble'
 import { ChatInput } from './ChatInput'
+import { FieldSelector } from './FieldSelector'
+import { FileSelector } from './FileSelector'
+import { FormFillView } from './FormFillView'
 
 export const ChatView: React.FC = () => {
   const messages = useChatStore((s) => s.messages)
   const activeAgentId = useChatStore((s) => s.activeAgentId)
+  const activeDocument = useFormFillStore((s) => s.activeDocument)
+  const formFillPhase = useFormFillStore((s) => s.formFillPhase)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  const showFieldSelector = activeAgentId === 'form-filler' && activeDocument && formFillPhase === 'select'
+  const showFileSelector = activeAgentId === 'form-filler' && formFillPhase === 'file-select'
+  const showFormFillView = activeAgentId === 'form-filler' && activeDocument && formFillPhase === 'fill'
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -20,10 +30,12 @@ export const ChatView: React.FC = () => {
         {messages.length === 0 ? <WelcomeScreen /> : (
           <div className="py-2">
             {messages.map((msg) => <MessageBubble key={msg.id} message={msg} />)}
+            {showFileSelector && <FileSelector />}
+            {showFieldSelector && <FieldSelector />}
+            {showFormFillView && <FormFillView />}
           </div>
         )}
       </div>
-
       <ChatInput />
     </div>
   )
@@ -38,7 +50,6 @@ const WelcomeScreen: React.FC = () => {
     <div className="flex flex-col items-center justify-center h-full px-8 py-12">
       <p className="text-black/80 text-sm mb-6 text-center">选择文件夹，使用 AI Agent 分析内容<br />或输入关键字搜索文件</p>
 
-      {/* Leader Agent - 突出显示 */}
       {leader && (
         <button
           onClick={() => {
@@ -62,7 +73,6 @@ const WelcomeScreen: React.FC = () => {
         </button>
       )}
 
-      {/* 其他 Agent */}
       <div className="grid grid-cols-2 gap-3 w-full max-w-md">
         {otherAgents.map((agent) => (
           <button key={agent.id}

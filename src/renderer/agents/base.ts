@@ -98,7 +98,7 @@ export abstract class BaseAgent {
 
   protected buildFolderContext(folder: FolderProject): string {
     if (!folder.files) return `文件夹: ${folder.path}`
-    const lines: string[] = [`文件夹路径: ${folder.path}`, `总文件数: ${folder.fileCount}`, '目录结构:']
+    const lines: string[] = [`文件夹路径: ${folder.path}`, `总文件数: ${folder.fileCount || 0}`, '目录结构:']
 
     const flatten = (entries: typeof folder.files, indent: number) => {
       for (const f of entries) {

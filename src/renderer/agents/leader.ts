@@ -1,4 +1,4 @@
-import { BaseAgent, type AgentConfig } from './base'
+import { BaseAgent, type AgentConfig, type AgentContext } from './base'
 import type { FolderProject } from '../stores/folderStore'
 import { agentRegistry } from './registry'
 import type { PlatformAPI } from '../api/platformAPI'
@@ -6,6 +6,7 @@ import type { MemoryStore } from '../memory/memoryStore'
 import { Sparkles } from 'lucide-react'
 import { callLLM } from '../utils/llm'
 import { useChatStore } from '../stores/chatStore'
+import { useSettingsStore } from '../stores/settingsStore'
 import { START_REPLIES, END_REPLIES, randomPick } from '../utils/replies'
 
 export class LeaderAgent extends BaseAgent {
@@ -33,19 +34,24 @@ export class LeaderAgent extends BaseAgent {
 - **Amelia** - 文档摘要专家，读取文档内容，总结项目核心信息
 - **James** - 文件整理专家，根据建议重新分类与整理文件
 - **Sophie** - 跨会话记忆专家，记住重要信息、回忆历史分析、管理偏好
-- **Ethan** - 正在开发中，敬请期待
+- **Ethan** - 信息采集与文档填写专家，从文档中提取待填项，对话式收集信息并自动填入文档
 
 ## 工作流程
 1. 分析用户意图，判断最适合的子 Agent
 2. 将用户问题转发给对应 Agent 处理
 
-## 路由规则
+## 路由规则（严格按关键词匹配，不要自由判断）
+- 用户提到"填写"、"填表"、"信息采集"、"问卷"、"表单"、"待填"、"填入"、"Ethan"、"帮我填"、"完成附件"、"完成文档"、"完成表格"、"帮我完成" → Ethan (form-filler)
 - 用户提到"分析"、"概览"、"结构"、"技术栈"、"文件类型"、"项目情况" → Charlotte (file-analyzer)
 - 用户提到"审查"、"代码质量"、"问题"、"bug"、"漏洞"、"改进"、"优化" → William (code-reviewer)
-- 用户提到"总结"、"摘要"、"文档"、"readme"、"项目介绍"、"功能" → Amelia (doc-summarizer)
+- 用户提到"总结"、"摘要"、"readme"、"项目介绍"、"功能" → Amelia (doc-summarizer)
 - 用户提到"整理"、"分类"、"重组"、"归档"、"移动文件"、"重新组织" → James (file-organizer)
 - 用户提到"记住"、"回忆"、"忘了"、"记忆"、"之前说过"、"历史记录" → Sophie (memory)
 - 如果不确定，优先使用 Charlotte
+
+## 重要：关于"文档"关键词
+- 如果用户说"填写文档"、"填表"等包含"填写"的，必须路由给 Ethan (form-filler)，不要路由给 Amelia
+- Amelia 只负责"总结"、"摘要"、"读取文档内容"，不负责填写
 
 ## 连续对话规则
 如果用户是在回复之前某个 Agent 的工作（如确认、追问、修改），应该路由回同一个 Agent。
@@ -60,7 +66,7 @@ export class LeaderAgent extends BaseAgent {
     useChatStore.getState().addAgentConversation({ agentName, agentColor, content, isLeader })
   }
 
-  async execute(ctx: { folder: FolderProject; userMessage: string; history?: { role: 'user' | 'agent'; content: string }[]; signal?: AbortSignal; knowledgeContext?: string; codebaseContext?: string }, onToken?: (token: string) => void): Promise<string> {
+  async execute(ctx: AgentContext, onToken?: (token: string) => void): Promise<string> {
     const agents = agentRegistry.getAll().filter((a) => a.id !== 'leader')
     const agentList = agents.map((a) => `- ${a.id}: ${a.name} (${a.description})`).join('\n')
 
@@ -120,10 +126,16 @@ ${memoryContext}
     try {
       let leaderContext = ''
       try {
+        const settingsStore = useSettingsStore.getState()
+        const userConfig = settingsStore.getAgentModel(this.config.id)
+        const provider = userConfig?.provider || this.config.provider
+        const model = userConfig?.model || this.config.model || ''
+        
         leaderContext = await callLLM({
-          provider: this.config.provider,
-          model: this.config.model || '',
+          provider,
+          model,
           messages: analysisMessages,
+          signal: ctx.signal,
         })
       } catch {
         // 分析失败不影响主流程
@@ -137,34 +149,53 @@ ${memoryContext}
       // Step 2: 检查是否是连续对话
       let targetAgentId = this.detectContinuousConversation(ctx.userMessage, ctx.history)
 
-      // Step 3: 如果不是连续对话，检测是否需要多 Agent 协作
+      // Step 2.5: 确定性关键词预检（不走 LLM，直接匹配）
       if (!targetAgentId) {
-        const multiAgentCheck = await this.detectMultiAgentTask(ctx.userMessage)
-        
-        if (multiAgentCheck.needCollaboration) {
-          // 多 Agent 协作流程
-          return await this.handleMultiAgentCollaboration(ctx, multiAgentCheck.agents, onToken)
-        }
-        
-        // 单 Agent 路由
-        const routePrompt = `请根据用户的问题，选择最合适的 Agent 来处理。
+        targetAgentId = this.keywordRoute(ctx.userMessage)
+      }
 
-可用 Agent：
-${agentList}
+      // Step 3: 表单填写类任务强制拦截（在LLM路由之前，避免LLM返回无法匹配的id）
+      if (!targetAgentId) {
+        // 宽泛匹配：包含"完成/弄/处理/搞定" + 文档相关词，或明确的表单填写关键词
+        const hasDocWord = /文档|表格|附件|申报书|表单|问卷|表/i.test(ctx.userMessage)
+        const hasActionWord = /完成|弄|处理|搞定|填/i.test(ctx.userMessage)
+        const explicitFormKeywords = /填写|填表|信息采集|待填|填入|帮我填|附件[一二三四五六七八九十\d]/i
+        if (explicitFormKeywords.test(ctx.userMessage) || (hasDocWord && hasActionWord)) {
+          targetAgentId = 'form-filler'
+        }
+      }
+
+      // Step 4: 单 Agent 路由（LLM 路由，作为 fallback）
+      if (!targetAgentId) {
+        const routePrompt = `根据用户意图，选择唯一合适的 Agent。只回复 agent id，不要其他内容。
+
+Agent 列表：
+- form-filler：填写文档、填表、完成附件/表格/申报书
+- file-analyzer：分析文件夹、项目结构、技术栈
+- code-reviewer：审查代码、找 bug、优化建议
+- doc-summarizer：总结文档内容、摘要、项目介绍
+- file-organizer：整理文件、分类、归档
+- memory：记住/回忆信息
 
 用户问题：${ctx.userMessage}
 
-请只回复 Agent 的 id（如 file-analyzer），不要回复其他内容。`
+只回复一个 agent id（必须是上面列表中的id，如 form-filler、file-analyzer 等）：`
 
         const routeMessages = [
-          { role: 'system' as const, content: '你是一个任务路由助手，只回复 Agent id，不要解释。' },
+          { role: 'system' as const, content: '只回复一个 agent id，不要解释，必须是列表中的id。' },
           { role: 'user' as const, content: routePrompt },
         ]
 
+        const settingsStore = useSettingsStore.getState()
+        const userConfig = settingsStore.getAgentModel(this.config.id)
+        const provider = userConfig?.provider || this.config.provider
+        const model = userConfig?.model || this.config.model || ''
+
         const routeResult = await callLLM({
-          provider: this.config.provider,
-          model: this.config.model || '',
+          provider,
+          model,
           messages: routeMessages,
+          signal: ctx.signal,
         })
 
         // 提取 Agent id
@@ -175,9 +206,22 @@ ${agentList}
             break
           }
         }
+        
+        // 如果LLM返回了无法匹配的id，再次检查是否是表单填写任务
+        if (!targetAgentId) {
+          const formFillPatterns = /填写|填表|附件|文档|表格|申报书|弄一下|处理|搞定/i
+          if (formFillPatterns.test(ctx.userMessage)) {
+            targetAgentId = 'form-filler'
+          }
+        }
       }
 
+      // Step 5: 如果单 Agent 路由仍然失败，检测是否需要多 Agent 协作
       if (!targetAgentId) {
+        const multiAgentCheck = await this.detectMultiAgentTask(ctx.userMessage, ctx.signal)
+        if (multiAgentCheck.needCollaboration) {
+          return await this.handleMultiAgentCollaboration(ctx, multiAgentCheck.agents, onToken)
+        }
         targetAgentId = 'file-analyzer'
       }
 
@@ -216,7 +260,7 @@ ${agentList}
     }
   }
 
-  private async detectMultiAgentTask(userMessage: string): Promise<{ needCollaboration: boolean; agents: string[] }> {
+  private async detectMultiAgentTask(userMessage: string, signal?: AbortSignal): Promise<{ needCollaboration: boolean; agents: string[] }> {
     const prompt = `分析以下任务是否需要多个 Agent 协作完成。
 
 ## 用户问题
@@ -227,6 +271,8 @@ ${userMessage}
 - **code-reviewer**: 代码审查 — 审查代码质量，发现问题和改进建议
 - **doc-summarizer**: 文档摘要 — 读取文档内容，总结项目核心信息
 - **file-organizer**: 文件整理 — 根据建议重新分类与整理文件
+- **form-filler**: 信息采集与文档填写 — 从文档中提取待填项，对话式收集信息并自动填入文档
+- **memory**: 跨会话记忆 — 记住重要信息、回忆历史分析、管理偏好
 
 ## 判断标准
 - 如果任务明确涉及多个方面（如"分析并整理"、"审查代码并总结文档"），则需要多 Agent 协作
@@ -244,16 +290,23 @@ ${userMessage}
 如果不需要协作，agents 数组只包含一个最合适的 Agent id。`
 
     try {
+      const settingsStore = useSettingsStore.getState()
+      const userConfig = settingsStore.getAgentModel(this.config.id)
+      const provider = userConfig?.provider || this.config.provider
+      const model = userConfig?.model || this.config.model || ''
+      
       const result = await callLLM({
-        provider: this.config.provider,
-        model: this.config.model || '',
+        provider,
+        model,
         messages: [
           { role: 'system', content: '你是任务分析助手，只回复 JSON，不要解释。' },
           { role: 'user', content: prompt },
         ],
+        signal,
       })
 
-      const jsonMatch = result.match(/\{[\s\S]*?\}/)
+      // 更精确的 JSON 提取：查找最外层的 {...}
+      const jsonMatch = result.match(/\{[\s\S]*?\}(?=\s*$|\s*\n)/)
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0])
         return {
@@ -302,6 +355,9 @@ ${userMessage}
           break
         case 'memory':
           task = `从记忆专家的角度协助：\n1. 检索相关的历史分析记录\n2. 回忆之前的项目上下文\n3. 提供历史参考信息\n用户原始需求：${ctx.userMessage}`
+          break
+        case 'form-filler':
+          task = `从信息采集专家的角度分析项目：\n1. 识别项目中的文档和模板文件\n2. 提取文档中需要填写的信息项\n3. 分析信息采集的完整性和规范性\n4. 提出文档填写优化建议\n用户原始需求：${ctx.userMessage}`
           break
         default:
           task = `${cfg.description}\n用户原始需求：${ctx.userMessage}`
@@ -362,16 +418,22 @@ ${folderInfo}
         try {
           this.pushConv(cfg.name, cfg.color, `🔍 开始分析: ${st.task.substring(0, 60)}...`, false)
 
+          const settingsStore = useSettingsStore.getState()
+          const userConfig = settingsStore.getAgentModel(st.agentId)
+          const provider = userConfig?.provider || cfg.provider
+          const model = userConfig?.model || cfg.model || ''
+
           const result = await callLLM({
-            provider: cfg.provider,
-            model: cfg.model || '',
+            provider,
+            model,
             messages: [
               { role: 'system', content: cfg.systemPrompt },
               { role: 'user', content: analyzePrompt },
             ],
+            signal: ctx.signal,
           })
 
-          const jsonMatch = result.match(/\{[\s\S]*?\}/)
+          const jsonMatch = result.match(/\{[\s\S]*\}/)
           let parsed: { findings?: any; data?: any; suggestions?: any } = {}
           if (jsonMatch) {
             try {
@@ -452,13 +514,19 @@ ${otherSummaries}
           const cfg = agentRegistry.getConfig(analysis.agentId)
 
           if (agent && cfg) {
+            const settingsStore = useSettingsStore.getState()
+            const userConfig = settingsStore.getAgentModel(analysis.agentId)
+            const provider = userConfig?.provider || cfg.provider
+            const model = userConfig?.model || cfg.model || ''
+
             const review = await callLLM({
-              provider: cfg.provider,
-              model: cfg.model || '',
+              provider,
+              model,
               messages: [
                 { role: 'system', content: '你是交叉评审助手，审视其他 Agent 的分析并补充你的专业视角。' },
                 { role: 'user', content: reviewPrompt },
               ],
+              signal: ctx.signal,
             })
 
             if (review.trim() !== '无需补充') {
@@ -515,16 +583,22 @@ ${allFindings}
     let synthesisText = ''
 
     try {
+      const settingsStore = useSettingsStore.getState()
+      const userConfig = settingsStore.getAgentModel(this.config.id)
+      const provider = userConfig?.provider || this.config.provider
+      const model = userConfig?.model || this.config.model || ''
+
       const synthesisResult = await callLLM({
-        provider: this.config.provider,
-        model: this.config.model || '',
+        provider,
+        model,
         messages: [
           { role: 'system', content: '你是综合合成助手，只输出 JSON。' },
           { role: 'user', content: synthesisPrompt },
         ],
+        signal: ctx.signal,
       })
 
-      const jsonMatch = synthesisResult.match(/\{[\s\S]*?\}/)
+      const jsonMatch = synthesisResult.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0])
         primaryAgentId = parsed.primaryAgentId || agentIds[0]
@@ -581,7 +655,7 @@ ${allFindings}
   private isTeamIntroduction(userMessage: string): boolean {
     const msg = userMessage.toLowerCase().trim()
     // 排除"介绍自己"、"介绍你"等自我介绍类问题
-    const selfIntroPatterns = [/介绍.*自己/, /介绍.*你$/, /你是谁/, /你能做什么/, /你能干嘛/]
+    const selfIntroPatterns = [/介绍.*自己/, /介绍.*你/, /你是谁/, /你能做什么/, /你能干嘛/]
     if (selfIntroPatterns.some(p => p.test(msg))) return false
     // 必须包含"介绍" + 团队相关词，避免"协作"等宽泛词误匹配
     const hasIntro = msg.includes('介绍') || msg.includes('介绍下') || msg.includes('介绍一下')
@@ -593,7 +667,7 @@ ${allFindings}
     const msg = userMessage.toLowerCase().trim()
     const patterns = [
       /介绍.*自己/,
-      /介绍.*你$/,
+      /介绍.*你/,
       /你是谁/,
       /你能做什么/,
       /你能干嘛/,
@@ -619,7 +693,7 @@ ${allFindings}
 - **Amelia** — 文档摘要专家，读取文档内容，总结项目核心信息
 - **James** — 文件整理专家，根据建议重新分类与整理文件
 - **Sophie** — 跨会话记忆专家，记住重要信息、回忆历史分析、管理偏好
-- **Ethan** — 正在开发中，敬请期待
+- **Ethan** — 信息采集与文档填写专家，从文档中提取待填项，对话式收集信息并自动填入文档
 
 ## 协作场景
 - **"分析并整理这个文件夹"** → Charlotte 分析 → James 执行整理
@@ -639,7 +713,7 @@ ${allFindings}
   }
 
   private isCasualConversation(userMessage: string): boolean {
-    const msg = userMessage.trim()
+    const msg = userMessage.trim().toLowerCase()
     // 检查是否是闲聊/感叹/评价性质的话，而不是具体任务
     const casualPatterns = [
       /^没什么/, /^好像没什么/, /^没有什么/,
@@ -685,7 +759,7 @@ ${allFindings}
 | **Amelia** | 文档摘要专家 | 读取文档内容，总结项目核心信息 |
 | **James** | 文件整理专家 | 根据建议重新分类与整理文件 |
 | **Sophie** | 跨会话记忆专家 | 记住重要信息、回忆历史分析、管理偏好 |
-| **Ethan** | 正在开发中 | 敬请期待 |
+| **Ethan** | 信息采集与文档填写专家 | 从文档中提取待填项，对话式收集信息并自动填入文档 |
 
 ## 多 Agent 协作场景
 
@@ -705,6 +779,48 @@ ${allFindings}
     }
 
     return teamIntro
+  }
+
+  private keywordRoute(userMessage: string): string | null {
+    const msg = userMessage.toLowerCase().trim()
+    
+    // form-filler 关键词（优先级最高）
+    const formFillerKeywords = ['填写', '填表', '完成附件', '完成文档', '完成表格', '帮我完成', '帮我填', '填一下', '把这个填了', '附件一', '附件1']
+    if (formFillerKeywords.some(kw => msg.includes(kw))) {
+      return 'form-filler'
+    }
+    
+    // file-analyzer 关键词
+    const analyzerKeywords = ['分析', '概览', '结构', '技术栈', '文件类型', '项目情况', '看看这个项目']
+    if (analyzerKeywords.some(kw => msg.includes(kw))) {
+      return 'file-analyzer'
+    }
+    
+    // code-reviewer 关键词
+    const reviewerKeywords = ['审查', '代码质量', 'bug', '漏洞', '改进', '优化']
+    if (reviewerKeywords.some(kw => msg.includes(kw))) {
+      return 'code-reviewer'
+    }
+    
+    // doc-summarizer 关键词
+    const summarizerKeywords = ['总结', '摘要', 'readme', '项目介绍', '功能']
+    if (summarizerKeywords.some(kw => msg.includes(kw))) {
+      return 'doc-summarizer'
+    }
+    
+    // file-organizer 关键词
+    const organizerKeywords = ['整理', '分类', '重组', '归档', '移动文件', '重新组织']
+    if (organizerKeywords.some(kw => msg.includes(kw))) {
+      return 'file-organizer'
+    }
+    
+    // memory 关键词
+    const memoryKeywords = ['记住', '回忆', '忘了', '记忆', '之前说过', '历史记录']
+    if (memoryKeywords.some(kw => msg.includes(kw))) {
+      return 'memory'
+    }
+    
+    return null
   }
 
   private detectContinuousConversation(userMessage: string, history?: { role: 'user' | 'agent'; content: string }[]): string | null {

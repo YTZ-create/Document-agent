@@ -1,4 +1,4 @@
-import { BaseAgent, type AgentConfig } from './base'
+import { BaseAgent, type AgentConfig, type AgentContext } from './base'
 import type { FolderProject } from '../stores/folderStore'
 import type { PlatformAPI, FileEntry } from '../api/platformAPI'
 import { FolderCog } from 'lucide-react'
@@ -68,7 +68,7 @@ export class FileOrganizerAgent extends BaseAgent {
 语言: 中文。`,
   }
 
-  async execute(ctx: { folder: FolderProject; userMessage: string; leaderContext?: string; history?: { role: 'user' | 'agent'; content: string }[] }, onToken?: (token: string) => void): Promise<string> {
+  async execute(ctx: AgentContext, onToken?: (token: string) => void): Promise<string> {
     if (!ctx.folder.files || ctx.folder.files.length === 0) {
       return '请先选择文件夹并等待扫描完成。'
     }
@@ -130,7 +130,7 @@ ${ctx.leaderContext ? `## 调度助手分析\n${ctx.leaderContext}\n` : ''}
         })
       }
     } catch (err: any) {
-      return `整理计划生成失败: ${err.message}`
+      return `整理计划生成失败: ${err instanceof Error ? err.message : String(err)}`
     }
   }
 
@@ -235,7 +235,7 @@ ${ctx.leaderContext ? `## 调度助手分析\n${ctx.leaderContext}\n` : ''}
 
     // 第一步：创建目录
     for (const dir of plan.directories) {
-      const dirPath = `${rootPath}/${dir}`
+      const dirPath = `${rootPath}/${dir.replace(/^[/\\]+/, '')}`
       const result = await this.platform.fs.createDirectory(dirPath)
       if (result.success) {
         results.push(`✅ 创建目录: ${dir}`)
@@ -247,8 +247,8 @@ ${ctx.leaderContext ? `## 调度助手分析\n${ctx.leaderContext}\n` : ''}
 
     // 第二步：移动文件
     for (const move of plan.moves) {
-      const srcPath = `${rootPath}/${move.source}`
-      const destPath = `${rootPath}/${move.destination}`
+      const srcPath = `${rootPath}/${move.source.replace(/^[/\\]+/, '')}`
+      const destPath = `${rootPath}/${move.destination.replace(/^[/\\]+/, '')}`
       
       const result = move.type === 'directory'
         ? await this.platform.fs.moveDirectory(srcPath, destPath)
@@ -258,7 +258,7 @@ ${ctx.leaderContext ? `## 调度助手分析\n${ctx.leaderContext}\n` : ''}
         results.push(`✅ ${move.type === 'directory' ? '移动目录' : '移动文件'}: ${move.source} → ${move.destination}`)
         successCount++
       } else {
-        results.push(`❌ 移动失败: ${move.source} - ${result.error}`)
+        results.push(`❌ 移动失败: ${move.source} - ${result.error || '未知错误'}`)
         failCount++
       }
     }
@@ -315,7 +315,7 @@ ${ctx.leaderContext ? `## 调度助手分析\n${ctx.leaderContext}\n` : ''}
     if (bytes === 0) return '0 B'
     const k = 1024
     const sizes = ['B', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1)
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
 }

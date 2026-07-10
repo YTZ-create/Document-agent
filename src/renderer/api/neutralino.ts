@@ -3,7 +3,7 @@
  * 所有原生功能（文件系统/存储/窗口）的统一入口
  */
 
-import type { PlatformAPI, PlatformFS, PlatformStorage, PlatformWindow, FileEntry } from './platformAPI'
+import type { PlatformAPI, PlatformFS, PlatformStorage, PlatformWindow, PlatformOS, FileEntry } from './platformAPI'
 
 declare global {
   interface Window {
@@ -28,7 +28,7 @@ interface NLStats {
   modifiedAt: number
 }
 
-const MAX_READ_SIZE = 5 * 1024 * 1024
+const MAX_READ_SIZE = 50 * 1024 * 1024 // 50MB，支持大型 docx/pdf 文件
 const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', 'dist', '.next', '.nuxt', 'target', 'build', '.cache'])
 
 function getExt(filename: string): string {
@@ -119,11 +119,43 @@ async function readFile(filePath: string): Promise<{ content: string | null; err
   if (!window.Neutralino) return { content: null, error: 'Neutralino not available', size: 0 }
   try {
     const stats: NLStats = await window.Neutralino.filesystem.getStats(filePath)
-    if (stats.size > MAX_READ_SIZE) return { content: null, error: 'File too large (>5MB)', size: stats.size }
+    if (stats.size > MAX_READ_SIZE) return { content: null, error: `File too large (>${MAX_READ_SIZE / 1024 / 1024}MB)`, size: stats.size }
     const data: string = await window.Neutralino.filesystem.readFile(filePath)
     return { content: data, error: null, size: stats.size }
   } catch (err: any) {
     return { content: null, error: err.message || 'Unknown error', size: 0 }
+  }
+}
+
+async function readBinaryFile(filePath: string): Promise<{ content: ArrayBuffer | null; error: string | null; size: number }> {
+  if (!window.Neutralino) return { content: null, error: 'Neutralino not available', size: 0 }
+  try {
+    const stats: NLStats = await window.Neutralino.filesystem.getStats(filePath)
+    if (stats.size > MAX_READ_SIZE) return { content: null, error: `File too large (>${MAX_READ_SIZE / 1024 / 1024}MB)`, size: stats.size }
+    const data: ArrayBuffer = await window.Neutralino.filesystem.readBinaryFile(filePath)
+    return { content: data, error: null, size: stats.size }
+  } catch (err: any) {
+    return { content: null, error: err.message || 'Unknown error', size: 0 }
+  }
+}
+
+async function writeFile(filePath: string, content: string): Promise<{ success: boolean; error?: string }> {
+  if (!window.Neutralino) return { success: false, error: 'Neutralino not available' }
+  try {
+    await window.Neutralino.filesystem.writeFile(filePath, content)
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Unknown error' }
+  }
+}
+
+async function writeBinaryFile(filePath: string, content: ArrayBuffer): Promise<{ success: boolean; error?: string }> {
+  if (!window.Neutralino) return { success: false, error: 'Neutralino not available' }
+  try {
+    await window.Neutralino.filesystem.writeBinaryFile(filePath, content)
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Unknown error' }
   }
 }
 
@@ -140,10 +172,54 @@ async function createDirectory(dirPath: string): Promise<{ success: boolean; err
 async function moveFile(sourcePath: string, destPath: string): Promise<{ success: boolean; error?: string }> {
   if (!window.Neutralino) return { success: false, error: 'Neutralino not available' }
   try {
-    // Neutralino 没有直接的 move API，需要复制后删除
-    const content = await window.Neutralino.filesystem.readFile(sourcePath)
-    await window.Neutralino.filesystem.writeFile(destPath, content)
-    await window.Neutralino.filesystem.removeFile(sourcePath)
+    // 先读取源文件内容
+    const content = await window.Neutralino.filesystem.readBinaryFile(sourcePath)
+    
+    // 写入临时文件（避免覆盖失败导致数据丢失）
+    const tempPath = destPath + '.tmp'
+    try {
+      await window.Neutralino.filesystem.writeBinaryFile(tempPath, content)
+    } catch (writeErr: any) {
+      // 写入失败时清理可能已创建的临时文件
+      try {
+        await window.Neutralino.filesystem.removeFile(tempPath)
+      } catch (cleanupErr: any) {
+        console.warn('[neutralino] Failed to cleanup temp file after write error:', cleanupErr?.message)
+      }
+      throw writeErr
+    }
+    
+    // 如果目标文件存在，先删除
+    try {
+      await window.Neutralino.filesystem.removeFile(destPath)
+    } catch (removeErr: any) {
+      // 目标文件不存在或删除失败，继续
+      console.warn('[neutralino] Failed to remove dest file before rename:', removeErr?.message)
+    }
+    
+    // 将临时文件重命名为目标文件
+    try {
+      await window.Neutralino.filesystem.renameFile(tempPath, destPath)
+    } catch (renameErr: any) {
+      // 重命名失败，尝试复制并删除临时文件
+      console.warn('[neutralino] Failed to rename temp file, falling back to copy:', renameErr?.message)
+      try {
+        const tempContent = await window.Neutralino.filesystem.readBinaryFile(tempPath)
+        await window.Neutralino.filesystem.writeBinaryFile(destPath, tempContent)
+        await window.Neutralino.filesystem.removeFile(tempPath)
+      } catch (fallbackErr: any) {
+        console.error('[neutralino] Fallback copy failed:', fallbackErr?.message)
+        throw fallbackErr
+      }
+    }
+    
+    // 删除源文件
+    try {
+      await window.Neutralino.filesystem.removeFile(sourcePath)
+    } catch (removeErr: any) {
+      console.warn('[neutralino] Failed to remove source file after move:', removeErr?.message)
+      // 文件已移动成功但删除失败，仍然返回成功
+    }
     return { success: true }
   } catch (err: any) {
     return { success: false, error: err.message || 'Unknown error' }
@@ -303,7 +379,24 @@ const windowApi: PlatformWindow = {
   },
 }
 
-const fsApi: PlatformFS = { scanDirectory, readFile, searchInDirectory, createDirectory, moveFile, moveDirectory }
+const fsApi: PlatformFS = { scanDirectory, readFile, readBinaryFile, writeFile, writeBinaryFile, searchInDirectory, createDirectory, moveFile, moveDirectory }
+
+// ---- OS 命令 ----
+const osApi: PlatformOS = {
+  async execCommand(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    if (!window.Neutralino) return { stdout: '', stderr: 'Neutralino not available', exitCode: -1 }
+    try {
+      const result = await window.Neutralino.os.execCommand(command)
+      return {
+        stdout: result.stdOut || '',
+        stderr: result.stdError || '',
+        exitCode: result.code || 0,
+      }
+    } catch (err: any) {
+      return { stdout: '', stderr: err.message || 'Unknown error', exitCode: -1 }
+    }
+  },
+}
 
 // ---- 工厂函数 ----
 // ---- 全局平台实例（供 UI 组件使用） ----
@@ -314,6 +407,7 @@ export function createNeutralinoPlatform(): PlatformAPI {
     fs: fsApi,
     storage,
     window: windowApi,
+    os: osApi,
     selectFolder,
   }
   return _platform
@@ -328,6 +422,7 @@ export const api = {
   fs: fsApi,
   settings: storage,
   window: windowApi,
+  os: osApi,
 }
 
 // ---- 初始化 ----

@@ -1,4 +1,4 @@
-import { BaseAgent, type AgentConfig } from './base'
+import { BaseAgent, type AgentConfig, type AgentContext } from './base'
 import type { FolderProject } from '../stores/folderStore'
 import type { PlatformAPI, FileEntry } from '../api/platformAPI'
 import { Code2 } from 'lucide-react'
@@ -53,16 +53,23 @@ export class CodeReviewerAgent extends BaseAgent {
 给出友好有建设性的审查报告，有具体代码建议时给出改进前后对比。语言: 中文。`,
   }
 
-  async execute(ctx: { folder: FolderProject; userMessage: string }, onToken?: (token: string) => void): Promise<string> {
+  async execute(ctx: AgentContext, onToken?: (token: string) => void): Promise<string> {
     if (ctx.folder.files) {
       const codeFiles = findCodeFiles(ctx.folder.files, 5)
       if (codeFiles.length > 0) {
         const snippets: string[] = []
         for (const f of codeFiles) {
-          const result = await this.platform.fs.readFile(f.path)
-          if (result.content) snippets.push(`### ${f.relativePath}\n\`\`\`\n${result.content.substring(0, 1500)}\n\`\`\``)
+          try {
+            const result = await this.platform.fs.readFile(f.path)
+            if (result.content) snippets.push(`### ${f.relativePath}\n\`\`\`\n${result.content.substring(0, 1500)}\n\`\`\``)
+          } catch (err) {
+            console.warn(`Failed to read ${f.path}:`, err)
+          }
         }
-        if (snippets.length > 0) ctx.userMessage = `以下为代码片段：\n\n${snippets.join('\n\n')}\n\n用户说明: ${ctx.userMessage}`
+        if (snippets.length > 0) {
+          const modifiedMessage = `以下为代码片段：\n\n${snippets.join('\n\n')}\n\n用户说明: ${ctx.userMessage}`
+          return super.execute({ ...ctx, userMessage: modifiedMessage }, onToken)
+        }
       }
     }
     return super.execute(ctx, onToken)
@@ -76,7 +83,10 @@ function findCodeFiles(files: FileEntry[], max: number): FileEntry[] {
     for (const f of entries) {
       if (result.length >= max) return
       if (f.isDirectory && f.children) search(f.children)
-      else if (exts.has(f.ext)) result.push(f)
+      else {
+        const ext = f.ext.startsWith('.') ? f.ext : `.${f.ext}`
+        if (exts.has(ext)) result.push(f)
+      }
     }
   }
   search(files)

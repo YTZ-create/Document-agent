@@ -1,4 +1,4 @@
-import { BaseAgent, type AgentConfig } from './base'
+import { BaseAgent, type AgentConfig, type AgentContext } from './base'
 import type { FolderProject } from '../stores/folderStore'
 import type { PlatformAPI, FileEntry } from '../api/platformAPI'
 import { FileText } from 'lucide-react'
@@ -53,16 +53,23 @@ export class DocSummarizerAgent extends BaseAgent {
 简洁 Markdown 格式，语言: 中文。`,
   }
 
-  async execute(ctx: { folder: FolderProject; userMessage: string }, onToken?: (token: string) => void): Promise<string> {
+  async execute(ctx: AgentContext, onToken?: (token: string) => void): Promise<string> {
     if (ctx.folder.files) {
       const docFiles = findDocFiles(ctx.folder.files)
       if (docFiles.length > 0) {
         const contents: string[] = []
         for (const f of docFiles) {
-          const result = await this.platform.fs.readFile(f.path)
-          if (result.content) contents.push(`### ${f.name}\n\`\`\`\n${result.content.substring(0, 2000)}\n\`\`\``)
+          try {
+            const result = await this.platform.fs.readFile(f.path)
+            if (result.content) contents.push(`### ${f.name}\n\`\`\`\n${result.content.substring(0, 2000)}\n\`\`\``)
+          } catch (err) {
+            console.warn(`Failed to read ${f.path}:`, err)
+          }
         }
-        if (contents.length > 0) ctx.userMessage = `项目文档：\n\n${contents.join('\n\n')}\n\n${ctx.userMessage || '请基于以上文档做项目总结。'}`
+        if (contents.length > 0) {
+          const modifiedMessage = `项目文档：\n\n${contents.join('\n\n')}\n\n${ctx.userMessage || '请基于以上文档做项目总结。'}`
+          return super.execute({ ...ctx, userMessage: modifiedMessage }, onToken)
+        }
       }
     }
     return super.execute(ctx, onToken)

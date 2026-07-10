@@ -8,7 +8,12 @@ import { formatFileSize } from '../../utils/formatters'
 import { api } from '../../api/neutralino'
 
 export const Sidebar: React.FC = () => {
-  const { folders, activeFolderId, setActiveFolder, addFolder, removeFolder, scanFolder } = useFolderStore()
+  const folders = useFolderStore((s) => s.folders)
+  const activeFolderId = useFolderStore((s) => s.activeFolderId)
+  const setActiveFolder = useFolderStore((s) => s.setActiveFolder)
+  const addFolder = useFolderStore((s) => s.addFolder)
+  const removeFolder = useFolderStore((s) => s.removeFolder)
+  const scanFolder = useFolderStore((s) => s.scanFolder)
   const setShowSettings = useSettingsStore((s) => s.setShowSettings)
   const toggleDashboard = useTokenUsageStore((s) => s.toggleDashboard)
   const sessionTotal = useTokenUsageStore((s) => s.sessionTotal)

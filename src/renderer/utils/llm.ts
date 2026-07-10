@@ -27,22 +27,48 @@ const PROVIDER_CONFIGS: Record<string, { baseURL: string; defaultModel: string }
 }
 
 async function resolveApiKey(opts: LLMOptions): Promise<string> {
+  let key: string | null = null
   if (opts.apiKeyProvider) {
-    return (await opts.apiKeyProvider()) || ''
+    key = await opts.apiKeyProvider()
+  } else {
+    key = await api.settings.getApiKey(opts.provider)
   }
-  return (await api.settings.getApiKey(opts.provider)) || ''
+  if (!key || key.trim() === '') {
+    throw new Error(`API Key 未配置或为空 (${opts.provider})。请在设置中配置 API Key。`)
+  }
+  return key
 }
 
 const MAX_RETRIES = 2
 const RETRY_DELAY_MS = 1500
 
-async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+/** 判断错误是否值得重试（网络/超时/服务端错误可重试，认证/参数错误不重试） */
+function isRetryableError(err: any): boolean {
+  if (!err) return true
+  const msg = (err.message || String(err)).toLowerCase()
+  // 认证/权限/参数错误 — 重试无意义
+  if (msg.includes('401') || msg.includes('403') || msg.includes('400') || msg.includes('422')) return false
+  if (msg.includes('api key') || msg.includes('apikey') || msg.includes('unauthorized')) return false
+  if (msg.includes('forbidden') || msg.includes('invalid_api_key')) return false
+  // 网络/超时/服务端错误 — 可以重试
+  return true
+}
+
+async function withRetry<T>(fn: () => Promise<T>, label: string, signal?: AbortSignal): Promise<T> {
   let lastErr: any
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await fn()
     } catch (err: any) {
       lastErr = err
+      if (signal?.aborted) {
+        throw new Error('Request aborted')
+      }
+      // 不可恢复的错误直接抛出，不浪费时间重试
+      if (!isRetryableError(err)) {
+        console.error(`[LLM] ${label} 不可恢复的错误，不重试:`, err?.message || err)
+        throw err
+      }
       if (attempt < MAX_RETRIES) {
         console.warn(`[LLM] ${label} 第 ${attempt + 1} 次失败，${RETRY_DELAY_MS}ms 后重试:`, err?.message || err)
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
@@ -65,7 +91,7 @@ export async function callLLM(opts: LLMOptions): Promise<string> {
     if (opts.provider === 'anthropic') return callAnthropic(apiKey, model, opts)
     if (opts.provider === 'google') return callGoogle(apiKey, model, opts)
     return callOpenAICompatible(config.baseURL, apiKey, model, opts)
-  }, `callLLM(${opts.provider}/${model})`)
+  }, `callLLM(${opts.provider}/${model})`, opts.signal)
 }
 
 export async function callLLMStream(
@@ -84,7 +110,7 @@ export async function callLLMStream(
     if (opts.provider === 'anthropic') return callAnthropicStream(apiKey, model, opts, onToken)
     if (opts.provider === 'google') return callGoogleStream(apiKey, model, opts, onToken)
     return callOpenAICompatibleStream(config.baseURL, apiKey, model, opts, onToken)
-  }, `callLLMStream(${opts.provider}/${model})`)
+  }, `callLLMStream(${opts.provider}/${model})`, opts.signal)
 }
 
 async function callOpenAICompatible(baseURL: string, apiKey: string, model: string, opts: LLMOptions): Promise<string> {
@@ -92,6 +118,7 @@ async function callOpenAICompatible(baseURL: string, apiKey: string, model: stri
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({ model, messages: opts.messages, max_tokens: 4096, temperature: 0.7 }),
+    signal: opts.signal,
   })
   if (!res.ok) { const err = await res.text(); throw new Error(`API 调用失败 (${res.status}): ${err}`) }
   const data = await res.json()
@@ -119,27 +146,31 @@ async function callOpenAICompatibleStream(
   let buffer = ''
   let fullText = ''
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed || !trimmed.startsWith('data:')) continue
-      const data = trimmed.slice(5).trim()
-      if (data === '[DONE]') return fullText
-      try {
-        const json = JSON.parse(data)
-        const token = json.choices?.[0]?.delta?.content || ''
-        if (token) { fullText += token; onToken(token) }
-        // OpenAI 兼容格式的 usage 在最后一条消息中
-        if (opts.onTokenUsage && json.usage) {
-          opts.onTokenUsage(json.usage.prompt_tokens || 0, json.usage.completion_tokens || 0)
-        }
-      } catch { /* skip */ }
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed || !trimmed.startsWith('data:')) continue
+        const data = trimmed.slice(5).trim()
+        if (data === '[DONE]') return fullText
+        try {
+          const json = JSON.parse(data)
+          const token = json.choices?.[0]?.delta?.content || ''
+          if (token) { fullText += token; onToken(token) }
+          // OpenAI 兼容格式的 usage 在最后一条消息中
+          if (opts.onTokenUsage && json.usage) {
+            opts.onTokenUsage(json.usage.prompt_tokens || 0, json.usage.completion_tokens || 0)
+          }
+        } catch { /* skip */ }
+      }
     }
+  } finally {
+    reader.releaseLock()
   }
   return fullText
 }
@@ -156,6 +187,7 @@ async function callAnthropic(apiKey: string, model: string, opts: LLMOptions): P
       messages: chatMessages.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
       max_tokens: 4096,
     }),
+    signal: opts.signal,
   })
   if (!res.ok) { const err = await res.text(); throw new Error(`Anthropic API 调用失败 (${res.status}): ${err}`) }
   const data = await res.json()
@@ -193,30 +225,34 @@ async function callAnthropicStream(
   let anthropicInputTokens = 0
   let anthropicOutputTokens = 0
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed || !trimmed.startsWith('data:')) continue
-      const data = trimmed.slice(5).trim()
-      try {
-        const json = JSON.parse(data)
-        if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
-          const token = json.delta.text || ''
-          if (token) { fullText += token; onToken(token) }
-        }
-        if (json.type === 'message_start' && json.message?.usage) {
-          anthropicInputTokens = json.message.usage.input_tokens || 0
-        }
-        if (json.type === 'message_delta' && json.usage) {
-          anthropicOutputTokens = json.usage.output_tokens || 0
-        }
-      } catch { /* skip */ }
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed || !trimmed.startsWith('data:')) continue
+        const data = trimmed.slice(5).trim()
+        try {
+          const json = JSON.parse(data)
+          if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
+            const token = json.delta.text || ''
+            if (token) { fullText += token; onToken(token) }
+          }
+          if (json.type === 'message_start' && json.message?.usage) {
+            anthropicInputTokens = json.message.usage.input_tokens || 0
+          }
+          if (json.type === 'message_delta' && json.usage) {
+            anthropicOutputTokens = json.usage.output_tokens || 0
+          }
+        } catch { /* skip */ }
+      }
     }
+  } finally {
+    reader.releaseLock()
   }
   if (opts.onTokenUsage) {
     opts.onTokenUsage(anthropicInputTokens, anthropicOutputTokens)
@@ -230,18 +266,25 @@ async function callGoogle(apiKey: string, model: string, opts: LLMOptions): Prom
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
   }))
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey
+    },
     body: JSON.stringify({
       system_instruction: systemMsg ? { parts: { text: systemMsg.content } } : undefined,
       contents,
       generationConfig: { maxOutputTokens: 4096, temperature: 0.7 },
     }),
+    signal: opts.signal,
   })
   if (!res.ok) { const err = await res.text(); throw new Error(`Google API 调用失败 (${res.status}): ${err}`) }
   const data = await res.json()
+  if (opts.onTokenUsage && data.usageMetadata) {
+    opts.onTokenUsage(data.usageMetadata.promptTokenCount || 0, data.usageMetadata.candidatesTokenCount || 0)
+  }
   return data.candidates?.[0]?.content?.parts?.[0]?.text || ''
 }
 
@@ -254,10 +297,13 @@ async function callGoogleStream(
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
   }))
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey
+    },
     body: JSON.stringify({
       system_instruction: systemMsg ? { parts: { text: systemMsg.content } } : undefined,
       contents,
@@ -272,23 +318,40 @@ async function callGoogleStream(
   const decoder = new TextDecoder()
   let buffer = ''
   let fullText = ''
+  let googleInputTokens = 0
+  let googleOutputTokens = 0
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed || !trimmed.startsWith('data:')) continue
-      const data = trimmed.slice(5).trim()
-      try {
-        const json = JSON.parse(data)
-        const token = json.candidates?.[0]?.content?.parts?.[0]?.text || ''
-        if (token) { fullText += token; onToken(token) }
-      } catch { /* skip */ }
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed || !trimmed.startsWith('data:')) continue
+        const data = trimmed.slice(5).trim()
+        try {
+          const json = JSON.parse(data)
+          const token = json.candidates?.[0]?.content?.parts?.[0]?.text || ''
+          if (token) { fullText += token; onToken(token) }
+          // Google 流式响应的 token 统计
+          if (json.usageMetadata) {
+            googleInputTokens = json.usageMetadata.promptTokenCount || 0
+            googleOutputTokens = json.usageMetadata.candidatesTokenCount || 0
+          }
+        } catch { /* skip */ }
+      }
     }
+  } finally {
+    reader.releaseLock()
   }
+  
+  // 报告 token 使用情况
+  if (opts.onTokenUsage && (googleInputTokens > 0 || googleOutputTokens > 0)) {
+    opts.onTokenUsage(googleInputTokens, googleOutputTokens)
+  }
+  
   return fullText
 }

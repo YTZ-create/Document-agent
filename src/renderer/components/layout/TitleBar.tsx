@@ -9,6 +9,21 @@ export const TitleBar: React.FC = () => {
   useEffect(() => {
     api.window.isMaximized().then(setIsMaximized)
     if (dragRef.current) api.window.setDraggableRegion(dragRef.current)
+
+    // 监听窗口状态变化
+    const handleMaximizeChange = () => {
+      api.window.isMaximized().then(setIsMaximized)
+    }
+
+    // 如果 API 支持事件监听
+    if ((api.window as any).on) {
+      ;(api.window as any).on('maximize', handleMaximizeChange)
+      ;(api.window as any).on('unmaximize', handleMaximizeChange)
+      return () => {
+        ;(api.window as any).off('maximize', handleMaximizeChange)
+        ;(api.window as any).off('unmaximize', handleMaximizeChange)
+      }
+    }
   }, [])
 
   const handleMinimize = () => {

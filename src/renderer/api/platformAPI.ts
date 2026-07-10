@@ -20,6 +20,9 @@ export interface FileEntry {
 export interface PlatformFS {
   scanDirectory(dirPath: string, onProgress?: (percent: number, current: number, total: number) => void): Promise<FileEntry[]>
   readFile(filePath: string): Promise<{ content: string | null; error: string | null; size: number }>
+  readBinaryFile(filePath: string): Promise<{ content: ArrayBuffer | null; error: string | null; size: number }>
+  writeFile(filePath: string, content: string): Promise<{ success: boolean; error?: string }>
+  writeBinaryFile(filePath: string, content: ArrayBuffer): Promise<{ success: boolean; error?: string }>
   createDirectory(dirPath: string): Promise<{ success: boolean; error?: string }>
   moveFile(sourcePath: string, destPath: string): Promise<{ success: boolean; error?: string }>
   moveDirectory(sourcePath: string, destPath: string): Promise<{ success: boolean; error?: string }>
@@ -46,10 +49,16 @@ export interface PlatformWindow {
   setDraggableRegion(el: HTMLElement): void
 }
 
+// ---- OS 命令 ----
+export interface PlatformOS {
+  execCommand(command: string, timeoutMs?: number): Promise<{ stdout: string; stderr: string; exitCode: number }>
+}
+
 // ---- 平台统一接口 ----
 export interface PlatformAPI {
   readonly fs: PlatformFS
   readonly storage: PlatformStorage
   readonly window: PlatformWindow
+  readonly os: PlatformOS
   selectFolder(): Promise<string | null>
 }

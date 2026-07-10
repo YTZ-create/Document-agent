@@ -3,9 +3,9 @@ import { FileAnalyzerAgent } from './fileAnalyzer'
 import { CodeReviewerAgent } from './codeReviewer'
 import { DocSummarizerAgent } from './docSummarizer'
 import { FileOrganizerAgent } from './fileOrganizer'
+import { FormFillerAgent } from './formFiller'
 import { LeaderAgent } from './leader'
 import { MemoryAgent } from './memoryAgent'
-import { PlaceholderAgent } from './placeholderAgent'
 import type { PlatformAPI } from '../api/platformAPI'
 import type { MemoryStore } from '../memory/memoryStore'
 
@@ -17,10 +17,10 @@ class AgentRegistry {
     this.register(new CodeReviewerAgent(platform))
     this.register(new DocSummarizerAgent(platform))
     this.register(new FileOrganizerAgent(platform))
+    this.register(new FormFillerAgent(platform))
     if (memoryStore) {
       this.register(new MemoryAgent(platform, memoryStore))
     }
-    this.register(new PlaceholderAgent(platform))
     // LeaderAgent 最后注册，因为它依赖其他 Agent，可选注入 memoryStore
     this.register(new LeaderAgent(platform, memoryStore))
   }
@@ -53,6 +53,7 @@ export const agentRegistry = new Proxy({} as AgentRegistry, {
       if (prop === 'getAll') return () => []
       if (prop === 'get') return () => undefined
       if (prop === 'getConfig') return () => undefined
+      if (prop === 'register') return () => { throw new Error('Registry not initialized') }
       return undefined
     }
     // 如果是函数，绑定正确的 this

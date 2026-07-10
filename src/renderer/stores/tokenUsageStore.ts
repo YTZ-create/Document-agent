@@ -44,12 +44,24 @@ export const useTokenUsageStore = create<TokenUsageState>((set, get) => ({
     const id = `tok-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     const newRecord: TokenUsageRecord = { ...record, id, timestamp: Date.now() }
     set((s) => {
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      const isToday = newRecord.timestamp >= today.getTime()
+      const now = new Date()
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+
+      // 检查是否需要重置 todayTotal（跨天）
+      let todayTotal = s.todayTotal
+      const lastRecord = s.records[s.records.length - 1]
+      if (lastRecord) {
+        const lastRecordDay = new Date(lastRecord.timestamp).setHours(0, 0, 0, 0)
+        if (todayStart > lastRecordDay) {
+          // 跨天了，重置 todayTotal
+          todayTotal = 0
+        }
+      }
+
+      const isToday = newRecord.timestamp >= todayStart
       return {
         records: [...s.records, newRecord],
-        todayTotal: isToday ? s.todayTotal + newRecord.totalTokens : s.todayTotal,
+        todayTotal: isToday ? todayTotal + newRecord.totalTokens : todayTotal,
         sessionTotal: s.sessionTotal + newRecord.totalTokens,
         totalRequests: s.totalRequests + 1,
       }

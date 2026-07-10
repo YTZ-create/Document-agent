@@ -74,7 +74,7 @@ export const useFolderStore = create<FolderState>((set, get) => ({
     const folder = get().folders.find((f) => f.id === id)
     if (!folder) return
     set((s) => ({
-      folders: s.folders.map((f) => (f.id === id ? { ...f, scanStatus: 'scanning', scanProgress: 0, scanCurrent: 0, scanTotal: 0 } : f)),
+      folders: s.folders.map((f) => (f.id === id ? { ...f, scanStatus: 'scanning', scanProgress: 0, scanCurrent: 0, scanTotal: 0, scanError: undefined } : f)),
       scanningFolderId: id,
     }))
     try {

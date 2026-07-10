@@ -32,3 +32,6 @@ Thumbs.db
 # Misc
 启动码.txt
 test-electron/
+
+# Slark
+.slark/

@@ -67,7 +67,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set((s) => {
       const filtered = s.agentModels.filter((m) => m.agentId !== agentId)
       const updated = [...filtered, { agentId, provider, model }]
-      try { api.storage.setData('agent_models', JSON.stringify(updated)) } catch { /* skip */ }
+      try { api.settings.setData('agent_models', JSON.stringify(updated)) } catch { /* skip */ }
       return { agentModels: updated }
     }),
   getAgentModel: (agentId) => {
@@ -76,7 +76,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
   loadAgentModels: async () => {
     try {
-      const raw = await api.storage.getData('agent_models')
+      const raw = await api.settings.getData('agent_models')
       if (raw) set({ agentModels: JSON.parse(raw) })
     } catch { /* skip */ }
   },
