@@ -21,18 +21,21 @@ interface FolderState {
   folders: FolderProject[]
   activeFolderId: string | null
   scanningFolderId: string | null
+  foldersCollapsed: boolean
   setActiveFolder: (id: string | null) => void
   addFolder: (name: string, path: string) => Promise<void>
   removeFolder: (id: string) => void
   scanFolder: (id: string) => Promise<void>
   setScanningFolderId: (id: string | null) => void
   setFolderScanStatus: (id: string, status: 'scanning' | 'success' | 'error', error?: string) => void
+  toggleFoldersCollapsed: () => void
 }
 
 export const useFolderStore = create<FolderState>((set, get) => ({
   folders: [],
   activeFolderId: null,
   scanningFolderId: null,
+  foldersCollapsed: false,
 
   setActiveFolder: (id) => set({ activeFolderId: id }),
 
@@ -95,6 +98,7 @@ export const useFolderStore = create<FolderState>((set, get) => ({
     }
   },
 
+  toggleFoldersCollapsed: () => set((s) => ({ foldersCollapsed: !s.foldersCollapsed })),
   setScanningFolderId: (id) => set({ scanningFolderId: id }),
   setFolderScanStatus: (id, status, error) =>
     set((s) => ({

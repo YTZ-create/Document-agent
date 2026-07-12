@@ -201,133 +201,37 @@ export const ChatInput: React.FC = () => {
 
           const currentField = activeDocument.fields[activeDocument.currentFieldIndex]
           if (!currentField) {
-            addMessage({ role: 'agent', content: '所有字段已填写完毕！说"完成"来生成填写好的文档。', agentName: 'Ethan', agentColor: '#F472B6' })
+            addMessage({ role: 'agent', content: '所有字段已处理完毕！请点击下方"完成"按钮来生成填写好的文档。', agentName: 'Ethan', agentColor: '#F472B6' })
             setIsStreaming(false)
             useChatStore.getState().setAbortController(null)
             return
           }
 
-          // 用 LLM 理解用户自然语言意图
-          const intent = await classifyFormIntent(text, currentField, activeDocument.fields.length, activeDocument.currentFieldIndex)
+          // 所有输入都作为当前字段的填写内容
+          useFormFillStore.getState().updateField(currentField.id, text, 'user')
+          addMessage({ role: 'agent', content: `已记录 **${currentField.label}** 的内容。`, agentName: 'Ethan', agentColor: '#F472B6' })
 
-          switch (intent.action) {
-            case 'fill_field': {
-              const value = intent.value || text
-              useFormFillStore.getState().updateField(currentField.id, value, 'user')
-              addMessage({ role: 'agent', content: `已记录 **${currentField.label}** 的内容。`, agentName: 'Ethan', agentColor: '#F472B6' })
-
-              const nextIdx = Math.min(activeDocument.currentFieldIndex + 1, activeDocument.fields.length - 1)
-              if (nextIdx !== activeDocument.currentFieldIndex) {
-                useFormFillStore.getState().setCurrentFieldIndex(nextIdx)
-                const nextField = activeDocument.fields[nextIdx]
-                const timer = setTimeout(() => {
-                  addMessage({
-                    role: 'agent',
-                    content: `第 ${nextIdx + 1} / ${activeDocument.fields.length} 项：**${nextField.label}**\n\n${nextField.placeholder ? `> ${nextField.placeholder}` : ''}`,
-                    agentName: 'Ethan',
-                    agentColor: '#F472B6',
-                  })
-                  setIsStreaming(false)
-                  timersRef.current.delete(timer)
-                }, 300)
-                timersRef.current.add(timer)
-              } else {
-                addMessage({ role: 'agent', content: '所有字段已填写完毕！说"完成"来生成填写好的文档。', agentName: 'Ethan', agentColor: '#F472B6' })
-                setIsStreaming(false)
-              }
-              useChatStore.getState().setAbortController(null)
-              return
-            }
-
-            case 'ai_generate': {
-              await handleAIGenerate(activeDocument, activeFolder, agent, currentField, addMessage, updateLastMessage, setIsStreaming)
-              useChatStore.getState().setAbortController(null)
-              return
-            }
-
-            case 'next_field': {
-              handleFieldNav(activeDocument, 1, addMessage)
+          const nextIdx = Math.min(activeDocument.currentFieldIndex + 1, activeDocument.fields.length - 1)
+          if (nextIdx !== activeDocument.currentFieldIndex) {
+            useFormFillStore.getState().setCurrentFieldIndex(nextIdx)
+            const nextField = activeDocument.fields[nextIdx]
+            const timer = setTimeout(() => {
+              addMessage({
+                role: 'agent',
+                content: `第 ${nextIdx + 1} / ${activeDocument.fields.length} 项：**${nextField.label}**\n\n${nextField.placeholder ? `> ${nextField.placeholder}` : ''}`,
+                agentName: 'Ethan',
+                agentColor: '#F472B6',
+              })
               setIsStreaming(false)
-              useChatStore.getState().setAbortController(null)
-              return
-            }
-
-            case 'prev_field': {
-              handleFieldNav(activeDocument, -1, addMessage)
-              setIsStreaming(false)
-              useChatStore.getState().setAbortController(null)
-              return
-            }
-
-            case 'skip_field': {
-              addMessage({ role: 'agent', content: `已跳过 **${currentField.label}**，不填写此项。`, agentName: 'Ethan', agentColor: '#F472B6' })
-              const nextIdx = Math.min(activeDocument.currentFieldIndex + 1, activeDocument.fields.length - 1)
-              if (nextIdx !== activeDocument.currentFieldIndex) {
-                useFormFillStore.getState().setCurrentFieldIndex(nextIdx)
-                const nextField = activeDocument.fields[nextIdx]
-                const timer = setTimeout(() => {
-                  addMessage({
-                    role: 'agent',
-                    content: `第 ${nextIdx + 1} / ${activeDocument.fields.length} 项：**${nextField.label}**\n\n${nextField.placeholder ? `> ${nextField.placeholder}` : ''}`,
-                    agentName: 'Ethan',
-                    agentColor: '#F472B6',
-                  })
-                  setIsStreaming(false)
-                  timersRef.current.delete(timer)
-                }, 300)
-                timersRef.current.add(timer)
-              } else {
-                addMessage({ role: 'agent', content: '所有字段已处理完毕！说"完成"来生成填写好的文档。', agentName: 'Ethan', agentColor: '#F472B6' })
-                setIsStreaming(false)
-              }
-              useChatStore.getState().setAbortController(null)
-              return
-            }
-
-            case 'complete': {
-              // 不再通过对话框命令触发完成，统一由 FormFillView 的"完成"按钮处理
-              addMessage({ role: 'agent', content: '请点击下方工具栏的"完成"按钮来生成填写好的文档。', agentName: 'Ethan', agentColor: '#F472B6' })
-              setIsStreaming(false)
-              useChatStore.getState().setAbortController(null)
-              return
-            }
-
-            case 'exit': {
-              endSession()
-              addMessage({ role: 'system', content: '已退出表单填写会话' })
-              setIsStreaming(false)
-              useChatStore.getState().setAbortController(null)
-              return
-            }
-
-            default: {
-              // other: 当作填写字段处理
-              useFormFillStore.getState().updateField(currentField.id, text, 'user')
-              addMessage({ role: 'agent', content: `已记录 **${currentField.label}** 的内容。`, agentName: 'Ethan', agentColor: '#F472B6' })
-
-              const nextIdx = Math.min(activeDocument.currentFieldIndex + 1, activeDocument.fields.length - 1)
-              if (nextIdx !== activeDocument.currentFieldIndex) {
-                useFormFillStore.getState().setCurrentFieldIndex(nextIdx)
-                const nextField = activeDocument.fields[nextIdx]
-                const timer = setTimeout(() => {
-                  addMessage({
-                    role: 'agent',
-                    content: `第 ${nextIdx + 1} / ${activeDocument.fields.length} 项：**${nextField.label}**\n\n${nextField.placeholder ? `> ${nextField.placeholder}` : ''}`,
-                    agentName: 'Ethan',
-                    agentColor: '#F472B6',
-                  })
-                  setIsStreaming(false)
-                  timersRef.current.delete(timer)
-                }, 300)
-                timersRef.current.add(timer)
-              } else {
-                addMessage({ role: 'agent', content: '所有字段已填写完毕！说"完成"来生成填写好的文档。', agentName: 'Ethan', agentColor: '#F472B6' })
-                setIsStreaming(false)
-              }
-              useChatStore.getState().setAbortController(null)
-              return
-            }
+              timersRef.current.delete(timer)
+            }, 300)
+            timersRef.current.add(timer)
+          } else {
+            addMessage({ role: 'agent', content: '所有字段已处理完毕！请点击下方"完成"按钮来生成填写好的文档。', agentName: 'Ethan', agentColor: '#F472B6' })
+            setIsStreaming(false)
           }
+          useChatStore.getState().setAbortController(null)
+          return
         }
 
         // 没有活跃文档，需要提取字段 —— 立即锁定会话，防止后续消息被 Oliver 路由走

@@ -91,10 +91,10 @@ export const FormFillView: React.FC = () => {
         addBubble('agent', `已选择 **${ids.length}** 个字段，我们逐个来填写。
 
 你可以：
-- **直接输入** — 填写当前字段
-- 说 **"AI 生成"** — 让我帮你生成内容
-- 说 **"跳过"** — 不填这个，下一个
-- 说 **"完成"** — 生成填写好的文档`)
+- **直接输入** — 填写当前字段的内容，按回车确认
+- 点击 **"AI 生成"** 按钮 — 让我帮你生成内容
+- 点击 **"下一个"** 按钮 — 跳过当前，填写下一个
+- 点击 **"完成"** 按钮 — 生成填写好的文档`)
 
         // 展示第一个字段
         const firstField = activeDocument.fields.find(f => f.id === ids[0])
@@ -130,81 +130,6 @@ ${firstField.placeholder ? `> ${firstField.placeholder}` : ''}`)
     const currentField = activeDocument.fields.find(f => f.id === currentFieldId)
     if (!currentField) return
 
-    // 命令词列表（用于冲突检测）
-    const commandWords = ['跳过', '不填', '不填这个', '这个不要', '没有', '不需要', '完成', '好了', '生成文档', '上一个', '回去', '刚才那个', '下一个', '继续']
-    const isCommandWord = commandWords.includes(text)
-
-    // AI 生成 - 使用更精确的模式匹配，避免误拦截
-    const aiGeneratePatterns = [
-      /\b(ai|AI)\s*(生成|填写|帮我|帮忙)/i,
-      /帮我(生成|填写|写|创建)/,
-      /AI\s*生成/,
-      /智能(生成|填写)/,
-      /^(生成|帮我填|帮我写|AI生成)$/
-    ]
-    const isAIGenerate = !isCommandWord && aiGeneratePatterns.some(pattern => pattern.test(text))
-    
-    if (isAIGenerate) {
-      addBubble('user', text)
-      await handleAIGenerate(currentField)
-      return
-    }
-
-    // 跳过（完全匹配优先）
-    const skipWords = ['跳过', '不填', '不填这个', '这个不要', '没有', '不需要']
-    if (skipWords.includes(text)) {
-      addBubble('user', text)
-      addBubble('agent', `已跳过 **${currentField.label}**，不填写此项。`)
-      goToNext()
-      return
-    }
-
-    // 完成（完全匹配优先）
-    if (text === '完成' || text === '好了' || text === '生成文档') {
-      addBubble('user', text)
-      // 先询问用户选择填写方式
-      addBubble('agent', `所有字段已填写完毕！请选择文档生成方式：`)
-      // 显示填写方式选择器（作为对话气泡的一部分）
-      setShowFillMethodSelector(true)
-      return
-    }
-
-    // 上一个（完全匹配优先）
-    if (text === '上一个' || text === '回去' || text === '刚才那个') {
-      addBubble('user', text)
-      if (currentFillIdx > 0) {
-        setCurrentFieldIndex(currentFillIdx - 1)
-        const prevId = fillOrder[currentFillIdx - 1]
-        const prevField = activeDocument.fields.find(f => f.id === prevId)
-        if (prevField) {
-          addBubble('agent', `回到第 ${currentFillIdx} / ${fillOrder.length} 项：**${prevField.label}**
-
-${prevField.placeholder ? `> ${prevField.placeholder}` : ''}
-${prevField.value ? `当前值：${prevField.value}` : ''}`)
-        }
-      } else {
-        addBubble('agent', '已经是第一项了。')
-      }
-      return
-    }
-
-    // 下一个（完全匹配优先）
-    if (text === '下一个' || text === '继续') {
-      addBubble('user', text)
-      goToNext()
-      return
-    }
-
-    // 冲突检测：如果用户输入恰好是命令词，确认意图
-    if (isCommandWord) {
-      addBubble('user', text)
-      addBubble('agent', `你输入了 "**${text}**"。你是想把它作为 **${currentField.label}** 的填写内容，还是想执行命令？
-
-- 直接再发一次 "**${text}**" → 作为填写内容
-- 输入其他命令（如"跳过""下一个"）→ 执行命令`)
-      return
-    }
-
     // 占位文字删除确认：如果字段有 anchorText，先弹出确认框，阻止用户输入
     if (currentField.anchorText && pendingPlaceholderConfirm?.fieldId !== currentField.id) {
       addBubble('user', text)
@@ -228,7 +153,7 @@ ${prevField.value ? `当前值：${prevField.value}` : ''}`)
     if (!activeDocument) return
     const nextIdx = currentFieldIndex + 1
     if (nextIdx >= fillOrder.length) {
-      addBubble('agent', '所有字段已处理完毕！说"完成"来生成填写好的文档。')
+      addBubble('agent', '所有字段已处理完毕！点击下方"完成"按钮来生成填写好的文档。')
       return
     }
     setCurrentFieldIndex(nextIdx)
@@ -271,7 +196,7 @@ ${nextField.value ? `当前值：${nextField.value}` : ''}`)
 
 > ${value}
 
-满意的话说"下一个"继续，不满意可以直接输入你自己的内容覆盖。`,
+满意的话点击"下一个"按钮继续，不满意可以直接输入你自己的内容覆盖。`,
           }
         }
         return copy
@@ -624,7 +549,7 @@ ${newFilePath}
           </div>
         )}
 
-        {/* 填写方式选择器 - 在用户说"完成"后显示 */}
+        {/* 填写方式选择器 - 在用户点击"完成"按钮后显示 */}
         {showFillMethodSelector && (
           <div className="flex gap-3 px-4 py-2">
             <div className="w-8 h-8 rounded-sm flex-shrink-0 flex items-center justify-center border-2 border-brutal-black mt-1" style={{ backgroundColor: '#F472B6' }}>
@@ -764,7 +689,7 @@ ${prevField.value ? `当前值：${prevField.value}` : ''}`)
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-            placeholder={pendingPlaceholderConfirm ? "请先选择占位文字处理方式" : "输入内容，或说 'AI 生成'、'跳过'、'完成'..."}
+            placeholder={pendingPlaceholderConfirm ? "请先选择占位文字处理方式" : "输入填写内容，按回车确认..."}
             className="input-brutal flex-1 text-sm"
             disabled={isProcessing || !!pendingPlaceholderConfirm}
           />
